@@ -1,0 +1,117 @@
+#!/bin/bash
+#
+# FILENAME:     del_guest
+# AUTHOR:       Bennett Samowich <bennett@foolean.org>
+# DATE:         2016-04-21
+#
+# DESCRIPTION:
+#   del_guest is a simple script to handle the deleting of KVM guests
+#   in an environment with multiple Hypervisors.  This script relies on
+#   the 'list_guests' script to handle searching for the guest within
+#   the environment.
+#
+###############################################################################
+
+# Find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Basic usage/help function
+usage() {
+    echo "usage: ${MYNAME} [-q] guest"
+    echo "where:"
+    echo "  -d      - Don't archive the guest"
+    echo "  -h      - Print this message"
+    echo "  -q      - Suppress notification messages"
+    exit 1
+}
+
+ARCHIVE=1
+
+# Parse the command-line options
+while getopts "CDdhq" OPTION
+do
+    case $OPTION in
+        D)
+            DEBUG=1
+            ;;
+        d)
+            ARCHIVE=0
+            ;;
+        h)  
+            usage
+            exit 1;     # should never get here
+            ;;
+        q)  
+            QUIET=1
+            ;;
+        ?)  
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+# we must have been given a guest name
+GUEST=$1
+if [ "${GUEST}" == "" ]
+then
+    usage
+    exit 1
+fi
+
+# Find the server the guest is on
+SERVER=$(get_server "${GUEST}")
+if [ "${SERVER}" == "" ]
+then
+    fatal "Unable to delete '${GUEST}', guest not found"
+    exit 1; # should never get here
+fi
+
+# Get the guest's virt-store
+VIRT_STORE=$(get_img_store "${GUEST}")
+if [ "${VIRT_STORE}" == "" ]
+then
+    fatal "Unable to delete '${GUEST}', missing or non-standard image store"
+    exit 1; # should never get here
+fi
+
+# Forcefully stop the guest
+"${VMEBIN}/stop_guest" "${GUEST}"
+
+# Removing the guest configuration
+notice "Removing configuration for '${GUEST}' from '${SERVER}'"
+"${VIRSH}" $(get_connect_method "${SERVER}")  undefine \
+    --wipe-storage --snapshots-metadata --managed-save "${GUEST}"
+
+# Remove the guest image file
+VM_IMG_PATH="${VIRT_STORE}/${GUEST}"
+if [ $(is_remote_virt_store "${SERVER}") -eq 1 ] && [ "${SERVER}" != "$(hostname -s)" ]
+then
+    VM_MGMT_IMG_STORE=$(get_mgmt_img_store "${SERVER}" "${VIRT_STORE}")
+    if [ "${VM_MGMT_IMG_STORE}" != "" ]
+    then
+        VM_MGMT_IMG_PATH="${VM_MGMT_IMG_STORE}/${GUEST}"
+        if [ ${ARCHIVE} -eq 1 ]
+        then
+            notice "Archiving mgmt path '${VM_MGMT_IMG_PATH}'"
+            archive_guest "${VM_MGMT_IMG_STORE}" "${GUEST}"
+        fi
+        notice "Deleting mgmt path '${VM_MGMT_IMG_PATH}'"
+        rm -r "${VM_MGMT_IMG_PATH}"
+    else
+        fatal "unablet to delete image path: local path unknown"
+    fi
+else
+    if [ ${ARCHIVE} -eq 1 ]
+    then
+        notice "Archiving local path '${VM_IMG_PATH}'"
+        archive_guest "${VIRT_STORE}" "${GUEST}"
+    fi
+    notice "Deleting local path '${VM_IMG_PATH}'"
+    rm -r "${VM_IMG_PATH}"
+fi

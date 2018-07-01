@@ -1,0 +1,76 @@
+#!/bin/bash
+#
+# FILENAME:     gstat
+# AUTHOR:       Bennett Samowich <bennett@foolean.org>
+# DATE:         2016-08-11
+#
+# DESCRIPTION:
+#   gstat is a simple script to output the heal status of gluster volumes
+#
+###############################################################################
+
+# Find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Basic usage/help function
+usage() {
+    echo "usage: ${MYNAME} [VOL [VOL]...]"
+    echo "where:"
+    echo "  -h      - Print this message"
+    exit 1
+}
+
+# Parse the command-line options
+while getopts "Dhq" OPTION
+do
+    case $OPTION in
+        D)  
+            DEBUG=1
+            ;;
+        h)  
+            usage
+            exit 1;     # should never get here
+            ;;
+        q)  
+            QUIET=1
+            ;;
+        ?)
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+if [ $# -eq 0 ]
+then
+    VOLUMES=$(gluster volume list)
+else
+    VOLUMES=$*
+fi
+# Brick sc1sn05a-ib Number of entries: 78 Brick sc1sn05b-ib Number of entries: 3 Brick sc1sn05c-ib Number of entries: 72
+
+for VOL in ${VOLUMES}
+do
+    printf "%-15s " "${VOL}:"
+    gluster volume heal "${VOL}" statistics heal-count   | \
+        egrep "^(Brick|Number)"         | \
+        sed -e 's/\..*//'               | \
+        sed ':a;N;$!ba;s/\n/ /g'        | \
+        awk '{
+            if ( $6 == 0 && $12 == 0 && $18 == 0 ) {
+                status = "ok";
+            } else {
+                status = "not ok";
+            }
+            printf "%20s %20s %20s ... %s\n",
+                $2"["$6"]",
+                $8"["$12"]",
+                $14"["$18"]",
+                status;
+        }'
+done

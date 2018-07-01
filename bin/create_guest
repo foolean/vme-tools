@@ -1,0 +1,232 @@
+#!/bin/bash
+#
+# FILENAME:     create_guest
+# AUTHOR:       Bennett Samowich <bennett@foolean.org>
+# DATE:         2016-04-21
+#
+# DESCRIPTION:
+#   create_guest is a simple script to handle the creating of KVM guests
+#   to an environment with multiple Hypervisors.  This script relies on
+#   the 'list_guests' script to handle searching for the guest within
+#   the environment.
+#
+###############################################################################
+
+# Find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Simple routine to output debugging output
+debug() {
+    if [ ${DEBUG} -eq 1 ]; then
+        echo "debug: $*"
+    fi
+}
+
+# Basic usage/help function
+usage() {
+    echo "usage: ${MYNAME} [OPTIONS] guest"
+    echo "Where:"
+    echo "  -a [cachetype]      - cache type for the image"
+    echo "                        (writethrough, writeback, none)"
+    echo "  -b bridge           - bridge interface"
+    echo "  -c cpu              - number of virtual cpu"
+    echo "  -d size             - size of the virtual disk in GB"
+    echo "  -D                  - print some debugging information"
+    echo "  -h                  - print this message"
+    echo "  -m mem              - ammount of memory in MB"
+    echo "  -q                  - suppress notification messages"
+    echo "  -r virt-store       - specify a different virt-store"
+    echo "  -s server           - hypervisor to define the guest on"
+    echo "  -t [raw|qcow2]      - type of image to create"
+    exit 1
+}
+
+# Some defaults
+VM_DISK="${DEFAULT_VM_DISK}"
+VM_RAM="${DEFAULT_VM_RAM}"
+VM_CPU="${DEFAULT_VM_CPU}"
+VM_BRIDGE="${DEFAULT_VM_BRIDGE}"
+VM_IMG_TYPE="${DEFAULT_VM_IMG_TYPE}"
+VM_IMG_CACHE="${DEFAULT_VM_IMG_CACHE}"
+SERVER="${DEFAULT_SERVER}"
+
+# Parse the command-line options
+while getopts "a:c:Dd:hm:qr:s:t:" OPTION
+do
+    case $OPTION in
+        a)
+            VM_IMG_CACHE="${OPTARG}"
+            ;;
+        b)
+            VM_BRIDGE="${OPTARG}"
+            ;;
+        c)  
+            VM_CPU="${OPTARG}"
+            ;;
+        d)  
+            VM_DISK="${OPTARG}"
+            ;;
+        D)  
+            DEBUG=1
+            ;;
+        h)
+            usage
+            ;;
+        m)  
+            VM_RAM="${OPTARG}"
+            ;;
+        q)
+            QUIET=1
+            ;;
+        r)  
+            VIRT_STORE="${OPTARG}"
+            ;;
+        s)
+            SERVER="${OPTARG}"
+            ;;
+        t)
+            VM_IMG_TYPE="${OPTARG}"
+            ;;
+        ?)  
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+# we must have a guest name
+VM_NAME=$1
+if [ "${VM_NAME}" == "" ]
+then
+    error "Unable to create guest, no name specified"
+    usage
+    exit 1; # should never get here
+fi
+
+# we must have a server
+if [ "${SERVER}" == "" ]
+then
+    error "Unable to create '${VM_NAME}', no server specified"
+    usage
+    exit 1; # should never get here
+fi
+
+# we must have a valid image type
+if [ "${VM_IMG_TYPE}" != "raw" ] && [ "${VM_IMG_TYPE}" != "qcow2" ]
+then
+    error "Unable to create '${VM_NAME}', invalid image type '${VM_IMG_TYPE}'"
+    usage
+    exit 1; # should never get here
+fi
+
+## Get the Zone that the guest is in
+#VM_ZONE=$(ssh "${SERVER}" "mount" | awk '/\/gfs\/mnt\/vme/ { print $1 }' | cut -f2 -d: | cut -f2 -d\-)
+#if [ "${VM_ZONE}" == "" ]
+#then
+#    fatal "Unable to create '${VM_NAME}', unable to retrieve Zone"
+#fi
+
+# Set where the guest image exists on the management server
+if [ "${SERVER}" == "$(hostname -s)" ]
+then
+    VMGR_VIRT_STORE="${VIRT_STORE}"
+    VIRT_INSTALL="virt-install"
+else
+    VMGR_VIRT_STORE=$(get_mgmt_img_store "${SERVER}")
+    VIRT_INSTALL="ssh ${SERVER} virt-install"
+fi
+VMGR_VM_IMG_PATH="${VMGR_VIRT_STORE}/${VM_NAME}"
+VMGR_VM_IMG="${VMGR_VM_IMG_PATH}/${VM_NAME}-vda"
+
+# Where the guest image exists on the hypervisor
+VM_IMG="${VIRT_STORE}/${VM_NAME}/${VM_NAME}-vda"
+
+# Print the debugging information
+debug "VIRT_STORE:         '${VM_STORE}'"
+debug "VM_CPU:           '${VM_CPU}'"
+debug "VM_RAM:           '${VM_RAM}'"
+debug "VM_DISK:     '${VM_DISK}'"
+debug "VM_NAME:          '${VM_NAME}'"
+debug "SERVER:        '${SERVER}'"
+debug "VM_ZONE:          '${VM_ZONE}'"
+debug "VMGR_VIRT_STORE:    '${VMGR_VM_STORE}'"
+debug "VMGR_VM_IMG_PATH: '${VMGR_VM_IMG_PATH}'"
+debug "VMGR_VM_IMG:      '${VMGR_VM_IMG}'"
+debug "VM_IMG:           '${VM_IMG}'"
+
+# Make sure the store path exists
+if [ ! -d "${VMGR_VIRT_STORE}" ]
+then
+    fatal "Virt store '${VMGR_VIRT_STORE}' not found, is the volume mounted?"
+    exit 1; # should never get here
+fi
+
+# Make sure the guest doesn't already exist
+EXISTING_SERVER=$(get_server "${VM_NAME}")
+if [ "${EXISTING_SERVER}" != "" ]
+then
+    fatal "Unable to create '${VM_NAME}', already exists on '${EXISTING_SERVER}'"
+    exit 1; # should never get here
+fi
+
+# Make sure the image path exists
+if [ ! -d "${VMGR_VM_IMG_PATH}" ]
+then
+    notice "Creating image path '${VMGR_VM_IMG_PATH}'"
+    mkdir "${VMGR_VM_IMG_PATH}"
+fi
+chmod 755 "${VMGR_VIRT_STORE}"
+chmod 750 "${VMGR_VM_IMG_PATH}"
+chown "${KVM_USER}:${KVM_GROUP}" "${VMGR_VM_IMG_PATH}"
+
+# Initialize the virtual disk
+if [ ! -f "${VMGR_VM_IMG}" ]
+then
+    notice "Initializing ${VM_DISK}GB image as '${VMGR_VM_IMG}'"
+    case "${VM_IMG_TYPE}" in
+        "raw")
+            dd if=/dev/zero of=${VMGR_VM_IMG} bs=1M count=$(( ${VM_DISK} * 1024 ))
+            ;;
+        "qcow2")
+            qemu-img create -f qcow2 -o preallocation=metadata "${VMGR_VM_IMG}" "${VM_DISK}G"
+            ;;
+        *)  
+            fatal "Unable to initialize '${VMGR_VM_IMG}', invalid image type '${VM_IMG_TYPE}'"
+            ;;
+    esac
+    chmod 640 "${VMGR_VM_IMG}"
+    chown "${KVM_USER}:${KVM_GROUP}" "${VMGR_VM_IMG}"
+fi
+
+# Create the guest
+notice "Creating the guest: '${VM_NAME}' on '${SERVER}'"
+${VIRT_INSTALL}                                                     \
+    --accelerate                                                    \
+    --virt-type="${VM_TYPE}"                                        \
+    --arch=x86_64                                                   \
+    --ram=${VM_RAM}                                                 \
+    --name="${VM_NAME}"                                             \
+    --vcpus=${VM_CPU}                                               \
+    --disk path="${VM_IMG},sparse=false,format=${VM_IMG_TYPE},cache=${VM_IMG_CACHE},io=native,bus=virtio,size=${VM_DISK}" \
+    --os-type="linux"                                               \
+    --network "bridge=${VM_BRIDGE},model=virtio"                    \
+    --boot hd,network,menu=on                                       \
+    --pxe                                                           \
+    --noautoconsole                                                 \
+    --graphics=vnc,listen=0.0.0.0
+notice "return code is '$?'"
+
+# Dump the XML for later use
+notice "Saving XML configuration"
+"${VIRSH}" $(get_connect_method $(get_server "${VM_NAME}")) \
+    dumpxml --migratable "${VM_NAME}" > "${VMGR_VM_IMG_PATH}/${VM_NAME}.xml" 
+chmod 640 "${VMGR_VM_IMG_PATH}/${VM_NAME}.xml"
+chown "${KVM_USER}:${KVM_GROUP}" "${VMGR_VM_IMG_PATH}/${VM_NAME}.xml"
+
+# Open a console to the newly created guest
+"${VMEBIN}/console_guest" "${VM_NAME}"

@@ -1,0 +1,145 @@
+VME Tools
+---------
+
+VME Tools is a suite of scripts to manage a Virtual Machine Environment (VME)
+based on KVM.
+
+PATH
+====
+
+You will need to add the path to the vme-tools/bin directory to your PATH
+
+
+
+The Tools
+=========
+
+add_disk_guest  - add a new virtual disk to a guest (does not handle cdrom)
+console_guest   - start a VNC console to the guest
+create_guest    - create a new guest
+del_guest       - delete a guest
+define_guest    - define a guest from a XML file
+edit_guest      - edit a guest's XML configuration
+info_guest      - display information about a guest
+list_guests     - list guests within the VME
+migrate_guest   - live migrate a guest to a new Hypervisor within the same zone
+node_list       - list Hypervisors and their available memory
+reboot_guest    - reboot a guest (requires acpid to be running on the guest)
+resume_guest    - resume a suspended guest
+save_guest      - save a guest's XML file
+shutdown_guest  - shutdown a guest (requires acpid to be running on the guest)
+start_guest     - start a guest
+stop_guest      - forcefully stop a guest
+suspend_guest   - suspend a guest
+undefine_guest  - undefine a guest from a Hypervisor
+vme_virsh       - a virsh wrapper to allow easier functionality within the VME
+
+
+Directory Structure
+===================
+
+VME Tools makes certain assumptions about the way the virt-store directories
+are organized on the filesystem.  From the perspective of the Hypervisors,
+all shared virt-stores should use a common mountpoint (e.g. /srv/vme/).  Since
+the management servers will mount all virt-stores, the structure will need to
+have an additional level for the Zone (e.g. /srv/vme/$ZONE/).  
+
+It is recommended to create a directory within the shared storage so that
+things will fail outright if the directory is not mounted.  For example; if
+the mount point is '/srv/vme' and images are placed directly in the mountpoint
+then operations will succeed whether the shared directory is mounted or not.
+However, if the images are to be placed in a directory within the mountpoint
+(e.g. /srv/vme/virt-store) then operations will fail when the directory isn't
+mounted.
+
+
+Gluster and Live Migration
+==========================
+
+During a 'live migration' libvirt will change the ownership of a guest's image
+file to root:root and then back to the user:group of the qemu process on the
+destination system.  libvirt will only do this if it detects that the image
+file resides on a shared filesystem.  Unfortunately, libvirt does not detect
+GlusterFS as a shared filesystem.  This causes the image file to be briefly
+unaccessible by the qemu process, which then causes I/O errors resulting the
+guest dropping to read-only mode.  The workaround is to set the configuration
+option 'dynamic_ownership' to '1' in qemu.conf.  This will stop libvirt from
+setting ownership.  This also puts the onus on the site administrator to
+ensure that user and group ids are synchronized within the VME.
+
+
+SSH keys
+========
+
+In a multi-node VME, vme-tools will make heavy use of ssh and pdsh.
+Passwordless keys can be used to help make things seamless and aide in
+automation.  The use of passwordless keys is not without its own level of
+risk.  You should take extra care to ensure that the passwordless keys can
+only be used from specific management servers.  All non-essential
+functionality should be removed.  Lastly; all commands should be forced
+through a command script that will log everything and possibly limit the scope
+of the remote commands.
+
+    Key Generation
+    ==============
+
+    Some will feel that a bit size of 8192 is excessive.  Generally 4096 is
+    fine but it never hurts to future proof.
+
+    ssh-keygen -t rsa -b 8192 -C "VME Management" -N "" -f "${VMGR_ETC}/id_rsa_vme"
+
+
+    Key Usage
+    =========
+
+    Include the contents of the resulting 'id_rsa_vme.pub' file in root's
+    authorized_keys file on your VME nodes (Hypervisors, Storage, etc).  You
+    will also want to add the following enhancements to the beginning of the
+    key as a comma-separated list
+
+    from="${comma-separated-list-of-management-server-IP-addresses}"
+    command="${VMMGR_BIN}/vme_ssh_wrapper",
+    no-agent-forwarding,no-port-forwarding,no-user-rc
+
+
+MDADM
+=====
+
+    Failed disk replacement
+    =======================
+
+    # Example assuming /dev/sdb is the failed drive
+
+    # Fail the bad drive
+    mdadm --manage /dev/md0 --fail /dev/sdb1
+    mdadm --manage /dev/md1 --fail /dev/sdb2
+
+    # Remove the failed drive
+    mdadm --manage /dev/md0 --remove /dev/sdb1
+    mdadm --manage /dev/md1 --remove /dev/sdb2
+
+    # Tell the system you're phsyically removing the disk
+    # Dell C6100
+    # /dev/sda = 0 0 0 0 
+    # /dev/sdb = 1 0 0 0 
+    # /dev/sdc = 2 0 0 0 
+    # 
+    # SCSI ID can be found by:
+    #   lshw -c disk | grep -B1 /dev/sdb
+    echo "scsi remove-single-device" 1 0 0 0 > /proc/scsi/scsi
+    
+    # Physically replace the disk
+
+    # Tell the system you've added the disk
+    # See above for the SCSI ID
+    echo "scsi add-single-device" 1 0 0 0 > /proc/scsi/scsi
+ 
+    # Copy the partition table from a good drive
+    sfdisk -d /dev/sda | sfdisk -f /dev/sdb
+ 
+    # Add the new drive into the array
+    mdadm --manage /dev/md0 --add /dev/sdb1
+    mdadm --manage /dev/md1 --add /dev/sdb2
+ 
+    # Verify
+    cat /proc/mdstat

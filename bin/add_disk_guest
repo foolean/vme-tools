@@ -1,0 +1,182 @@
+#!/bin/bash
+#
+# FILENAME:     add_disk_guest
+# AUTHOR:       Bennett Samowich <bennett@foolean.org>
+# DATE:         2016-04-21
+#
+# DESCRIPTION:
+#   add_disk_guest is a simple script to handle the adding of virtual
+#   disk images to a KVM guest.
+#
+###############################################################################
+
+# Find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Simple routine to output debugging output
+debug() {
+    if [ ${DEBUG} -eq 1 ]; then
+        echo "debug: $*"
+    fi
+}
+
+# Basic usage/help function
+usage() {
+    echo "usage: ${MYNAME} [OPTIONS] guest"
+    echo "Where:"
+    echo "  -d size         - size of the virtual disk in GB"
+    echo "  -D              - print some debugging information"
+    echo "  -h              - print this message"
+    echo "  -q              - suppress notification messages"
+    echo "  -t [raw|qcow2]  - type of image to create"
+    exit 1
+}
+
+# Some defaults
+VM_DISK_SIZE="${DEFAULT_VM_DISK}"
+VM_IMG_TYPE="${DEFAULT_VM_IMG_TYPE}"
+
+# Parse the command-line options
+while getopts "Dd:hqt:" OPTION
+do
+    case $OPTION in
+        d)  
+            VM_DISK_SIZE="${OPTARG}"
+            ;;
+        D)  
+            DEBUG=1
+            ;;
+        h)
+            usage
+            ;;
+        q)
+            QUIET=1
+            ;;
+        t)
+            VM_IMG_TYPE="${OPTARG}"
+            ;;
+        ?)  
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+# we must have a guest name
+GUEST=$1
+if [ "${GUEST}" == "" ]
+then
+    error "Unable to create guest, no name specified"
+    usage
+    exit 1; # should never get here
+fi
+
+# Find the server the guest is on
+SERVER=$(get_server "${GUEST}")
+if [ "${SERVER}" == "" ]
+then
+    fatal "Unable to info '${GUEST}', guest not found"
+    exit 1; # should never get here
+fi
+
+# we must have a valid image type
+if [ "${VM_IMG_TYPE}" != "raw" ] && [ "${VM_IMG_TYPE}" != "qcow2" ]
+then
+    error "Unable to create '${GUEST}', invalid image type '${VM_IMG_TYPE}'"
+    usage
+    exit 1; # should never get here
+fi
+
+# Get the next drive name to use
+NEW_DRIVE_NAME=$(get_next_drive "${GUEST}")
+
+VIRT_STORE=$(get_img_store "${GUEST}")
+
+# Set where the guest image exists on the management server
+if [ "${SERVER}" == "$(hostname -s)" ]
+then
+    VMGR_VIRT_STORE="${VIRT_STORE}"
+else
+    VMGR_VIRT_STORE=$(get_mgmt_img_store "${SERVER}")
+fi
+VMGR_VM_IMG_PATH="${VMGR_VIRT_STORE}/${GUEST}"
+
+VMGR_VM_IMG="${VMGR_VM_IMG_PATH}/${GUEST}-${NEW_DRIVE_NAME}"
+
+# Where the guest image exists on the hypervisor
+VM_IMG="${VIRT_STORE}/${GUEST}/${GUEST}-${NEW_DRIVE_NAME}"
+
+# Print the debugging information
+debug "VIRT_STORE:       '${VIRT_STORE}'"
+debug "VM_DISK_SIZE:     '${VM_DISK_SIZE}'"
+debug "GUEST:            '${GUEST}'"
+debug "SERVER:           '${SERVER}'"
+debug "VMGR_VIRT_STORE:  '${VMGR_VIRT_STORE}'"
+debug "VMGR_VM_IMG_PATH: '${VMGR_VM_IMG_PATH}'"
+debug "VMGR_VM_IMG:      '${VMGR_VM_IMG}'"
+debug "VM_IMG:           '${VM_IMG}'"
+
+# Make sure the store path exists
+if [ ! -d "${VMGR_VIRT_STORE}" ]
+then
+    fatal "Virt store '${VMGR_VIRT_STORE}' not found, is the volume mounted?"
+    exit 1; # should never get here
+fi
+
+# Make sure the guest already exists
+EXISTING_SERVER=$(get_server "${GUEST}")
+if [ "${EXISTING_SERVER}" == "" ]
+then
+    fatal "Unable to add disk to '${GUEST}', guest does not exist"
+    exit 1; # should never get here
+fi
+
+# Make sure the image path exists
+if [ ! -d "${VMGR_VM_IMG_PATH}" ]
+then
+    notice "Creating image path '${VMGR_VM_IMG_PATH}'"
+    mkdir "${VMGR_VM_IMG_PATH}"
+fi
+chmod 755 "${VMGR_VIRT_STORE}"
+chmod 750 "${VMGR_VM_IMG_PATH}"
+chown "${KVM_USER}:${KVM_GROUP}" "${VMGR_VM_IMG_PATH}"
+
+# Initialize the virtual disk
+if [ ! -f "${VMGR_VM_IMG}" ]
+then
+    notice "Initializing ${VM_DISK_SIZE}GB image as '${VMGR_VM_IMG}'"
+    case "${VM_IMG_TYPE}" in
+        "raw")
+            dd if=/dev/zero of=${VMGR_VM_IMG} bs=1M count=$(( ${VM_DISK_SIZE} * 1024 ))
+            ;;
+        "qcow2")
+            qemu-img create -f qcow2 -o preallocation=metadata "${VMGR_VM_IMG}" "${VM_DISK_SIZE}G"
+            ;;
+        *)  
+            fatal "Unable to initialize '${VMGR_VM_IMG}', invalid image type '${VM_IMG_TYPE}'"
+            ;;
+    esac
+    chmod 640 "${VMGR_VM_IMG}"
+    chown "${KVM_USER}:${KVM_GROUP}" "${VMGR_VM_IMG}"
+fi
+
+# Get the connection method
+CONNECT=$(get_connect_method "${SERVER}")
+
+# Add the new disk image to the guest
+notice "Adding disk to the guest: '${GUEST}' on '${SERVER}'"
+echo "${VIRSH}" ${CONNECT} attach-disk "${GUEST}" --source "${VM_IMG}" --target="${NEW_DRIVE_NAME}" --persistent --live --sourcetype=file
+"${VIRSH}" ${CONNECT} attach-disk "${GUEST}" --source "${VM_IMG}" --target="${NEW_DRIVE_NAME}" --persistent --live --sourcetype=file
+notice "return code is '$?'"
+
+# Dump the XML for later use
+notice "Saving XML configuration"
+"${VIRSH}" ${CONNECT} \
+    dumpxml --migratable "${GUEST}" > "${VMGR_VM_IMG_PATH}/${GUEST}.xml" 
+chmod 640 "${VMGR_VM_IMG_PATH}/${GUEST}.xml"
+chown "${KVM_USER}:${KVM_GROUP}" "${VMGR_VM_IMG_PATH}/${GUEST}.xml"

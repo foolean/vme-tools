@@ -1,0 +1,75 @@
+#!/bin/bash
+#
+# vme_ssh_wrapper:
+#   simple wrapper to log and potentially restrict commands
+#   that are executed using a VME ssh key.
+#
+###############################################################################
+
+# Find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+VMEETC=$(readlink -f "${VMEBIN}/../etc")
+MYNAME=$(basename $0)
+
+# Load common functions and variables
+. "${VMEETC}/vme.cfg"
+
+# Get the connecting client's information
+CLIENT=$(echo "${SSH_CLIENT}" | awk '{print $1":"$2}')
+
+# Flags
+IS_VALID_COMMAND=0
+IS_ADMIN_USER=0
+
+# Catch SIGINT
+trap trap_exit INT
+trap_exit() {
+  /usr/bin/logger -it "${MYNAME}" "Caught SIGINT, exiting"
+  kill -9 ${PPID}
+  exit 0
+}
+
+# List of commands that we will be looking for
+QEMU_SSH="sh -c 'if 'nc' -q 2>&1 | grep \"requires an argument\" >/dev/null 2>&1; then ARG=-q0;else ARG=;fi;'nc' \$ARG -U /var/run/libvirt/libvirt-sock'"
+LIST_ALL="virsh -qr list --all"
+
+# Determine if we're root or an admin user
+ADMIN=$(grep "^${LOGNAME}$" "${VMEETC}/admins" 2>/dev/null)
+if [ "${LOGNAME}" == "root" ] || [ "${LOGNAME}" == "${ADMIN}" ]
+then
+    IS_ADMIN_USER=1
+fi
+
+# Determine if we're permitted to run the command
+if [ ${IS_ADMIN_USER} -eq 1 ]
+then
+    # admin users get to run anything ... for now
+    IS_VALID_COMMAND=1
+else
+    # non-admin users can run a handful of specific commands
+    case "${SSH_ORIGINAL_COMMAND}" in
+        "${QEMU_SSH}")
+            IS_VALID_COMMAND=1
+            ;;
+        "${LIST_ALL}")
+            IS_VALID_COMMAND=1
+            ;;
+    esac
+fi
+
+# If we have a valid command ...
+if [ ${IS_VALID_COMMAND} -eq 1 ]
+then
+    # ... log the command
+    /usr/bin/logger -it "${MYNAME}" "Running command as ${LOGNAME} for ${CLIENT}: ${SHELL} -c \"${SSH_ORIGINAL_COMMAND}\""
+    umask 0077
+
+    # ... run the command
+    exec /bin/sh -c "${SSH_ORIGINAL_COMMAND:-$SHELL}"
+else
+    # Log the invalid command and exit
+    /usr/bin/logger -it "${MYNAME}" "Invalid command from ${CLIENT} as ${LOGNAME}: '${SSH_ORIGINAL_COMMAND}'"
+    echo "Illegal command!  This incident has been logged and reported."
+    exit 1
+fi
+exit 0

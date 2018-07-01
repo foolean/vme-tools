@@ -1,0 +1,67 @@
+#!/bin/bash
+#
+# FILENAME:     list_guests
+# AUTHOR:       Bennett Samowich <bennett@foolean.org>
+# DATE:         2016-04-21
+#
+# DESCRIPTION:
+#   list_guests is a simple script that lists all guests running in the VME
+#
+#   If pdsh(1) or the gender is not specified then list_guests will assume
+#   that it is being run locally and forgo the use of pdsh(1).
+#
+###############################################################################
+
+# find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Basic usage/help function
+usage() {
+    echo "usage: ${MYNAME} [-q] [-g gender]"
+    echo "where:"
+    echo "  -g GENDER   - Specify the pdsh(1) gender"
+    echo "  -h          - Print this message"
+    echo "  -q          - Suppress notification messages"
+    exit 1
+}
+
+# Set the default gender
+GENDER="${DEFAULT_GENDER}"
+
+# Parse the command-line options
+while getopts "Dhg:q" OPTION
+do
+    case $OPTION in
+        D)
+            DEBUG=1
+            ;;
+        h)  
+            usage
+            exit 1;     # should never get here
+            ;;
+        g)  
+            GENDER="${OPTARG}"
+            ;;
+        q)
+            QUIET=1
+            ;;
+        ?)  
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+
+# Make sure the gender is valid
+if [ $(is_valid_gender "${GENDER}") -ne 1 ]
+then
+    fatal "Unable to retrieve list, gender '${GENDER}' not found"
+    exit 1;     # Should never get here
+fi
+
+# Retrieve the list of all guests
+list_guests

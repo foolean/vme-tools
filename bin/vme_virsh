@@ -1,0 +1,81 @@
+#!/bin/bash
+#
+# FILENAME:     vme_virsh
+# AUTHOR:       Bennett Samowich <bennett@foolean.org>
+# DATE:         2016-04-21
+#
+# DESCRIPTION:
+#
+###############################################################################
+
+# Find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Basic usage/help function
+usage() {
+    echo "usage: ${MYNAME} command guest [args]"
+    echo "where:"
+    echo "  -h      - Print this message"
+    exit 1
+}
+
+# Parse the command-line options
+while getopts "Dhq" OPTION
+do
+    case $OPTION in
+        D)
+            DEBUG=1
+            ;;
+        h)  
+            usage
+            exit 1;     # should never get here
+            ;;
+        q)  
+            QUIET=1
+            ;;
+        ?)  
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+# we must have been given a virsh command
+COMMAND=$1
+if [ "${COMMAND}" == "" ]
+then
+    usage
+    exit 1
+fi
+shift
+
+# we must have been given a guest name
+GUEST=$1
+if [ "${GUEST}" == "" ]
+then
+    usage
+    exit 1
+fi
+shift
+
+# The remaining arguments will be passed to virsh
+ARGS=$*
+
+# Find the server the guest is on
+SERVER=$(get_server "${GUEST}")
+if [ "${SERVER}" == "" ]
+then
+    fatal "Unable to info '${GUEST}', guest not found"
+    exit 1; # should never get here
+fi
+
+# Get the infrmation about the guest
+notice "Getting information for '${GUEST}' on '${SERVER}'"
+CONNECT=$(get_connect_method "${SERVER}") 
+
+"${VIRSH}" ${CONNECT} ${COMMAND} "${GUEST}" ${ARGS}

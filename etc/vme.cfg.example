@@ -1,0 +1,39 @@
+# Credentials for IPMI (bmc, imm, etc)
+IPMI_USER="admin"
+IPMI_PASS="adminpw"
+
+# Where the guest image exists on the management server
+VIRT_STORE="/var/lib/libvirt/images/virt-store"
+
+# User and group for ownership
+KVM_USER="libvirt-qemu"
+KVM_GROUP="kvm"
+KVM_MODE="0600"
+
+# Default settings and parameters
+DEFAULT_SERVER="$(hostname -s)";    # Default server
+DEFAULT_GENDER="";                  # Default pdsh(1) gender
+DEFAULT_VM_TYPE="qemu";             # Default guest type (e.g. kvm, qemu, etc)
+DEFAULT_VM_CPU="1";                 # Default number of CPUs in the guest
+DEFAULT_VM_RAM="1024";              # Default RAM, in MB, for guests
+DEFAULT_VM_DISK="10";               # Default disk size, in GB, for guests
+DEFAULT_VM_IMG_TYPE="qcow2";        # Default image type (e.g. raw, qcow2, etc)
+DEFAULT_VM_BRIDGE="bridge0";        # Default bridge interface
+
+# Basic flags
+DEBUG=0
+QUIET=0
+
+# Encryption algorithm
+GPG_CIPHER_ALGO="AES256"
+
+# Encryption key list
+GPG_RECIPIENT_KEYS=""
+
+# Credentials for archiving deleted systems
+#ARCHIVE_USER="backup"
+#ARCHIVE_HOST="remote-host"
+#ARCHIVE_PORT="remote-port"
+#ARCHIVE_KEY="/path/to/ssh/key"
+#ARCHIVE_PATH="/path/on/remote/system"
+#ARCHIVE_CMD="remote-command"

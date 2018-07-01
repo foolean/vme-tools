@@ -1,0 +1,180 @@
+#!/bin/bash
+
+# Find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Amount of memory, in KiB, to reserve for the Hypervisor
+RESERVED_MEM=4194304
+
+REBOOT=0
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Basic usage/help function
+usage() {
+    echo "usage: ${MYNAME} [OPTIONS] node"
+    echo "Where:"
+    echo "  -D          - print extra debugging output"
+    echo "  -h          - print this message"
+    echo "  -r          - reboot the node after update"
+    exit 1
+}
+
+# Parse the command-line options
+while getopts "Dhr" OPTION
+do
+    case $OPTION in
+        D)  
+            DEBUG=1
+            ;;
+        h)
+            usage
+            ;;
+        r)
+            REBOOT=1
+            ;;
+        ?)  
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+VACATE="${1}"
+if [ "${VACATE}" == "" ]
+then
+    echo "usage: ${MYNAME} [server]"
+    exit 1
+fi
+VCONNECT=$(get_connect_method "${VACATE}")
+
+# Get the list of guests on the server to be vacated
+GUESTS=$(${VIRSH} ${VCONNECT} list --all | grep running | awk '{print $2}')
+
+# Get the list of servers in the same zone as the one being vacated
+GENDER=$(nodeattr -l "${VACATE}" | head -n 1)
+SERVERS=($(nodeattr -s "${GENDER}"))
+
+# Iterate over the guests on the server to be vacated
+echo "# Migrating guests off of ${VACATE}"
+START=0
+for GUEST in ${GUESTS}
+do
+    # Get the guests configured memory
+    GMEM=$(${VIRSH} ${VCONNECT} dominfo "${GUEST}" | grep "Max memory" | awk '{print $3}')
+    #GCPU=$(${VIRSH} ${VCONNECT} dominfo "${GUEST}" | grep "CPU(s)" | awk '{print $2}')
+
+    # Iterate over the list of servers, finding a new home for the guest
+    for ((I=${START}; I<${#SERVERS[@]}; I++))
+    do
+        OK=0
+        # Skip the server we're vacating
+        if [ "${SERVERS[$I]}" == "${VACATE}" ]
+        then
+            continue
+        fi
+
+        # Get the available memory on the potential server
+        CONNECT=$(get_connect_method "${SERVERS[$I]}")
+        RAM=$(${VIRSH} ${CONNECT} nodeinfo | grep "Memory size" | awk '{print $3}')
+        MEM=$(${VIRSH} ${CONNECT} list --all | grep running | awk '{print $2}' | while read DOM; do ${VIRSH} ${CONNECT} dominfo "${DOM}" | grep "Max memory"; done | awk 'BEGIN { mem=0; }{ mem+=$3 } END{ print mem; }')
+        FREE=$(( ( ${RAM} - ${RESERVED_MEM} ) - ${MEM} ))
+
+        # Ensure there is enough memory for the guest
+        if [ ${FREE} -gt ${GMEM} ]
+        then
+            OK=1
+        else
+            OK=0
+        fi
+
+        # Ensure there is enough cpu for the guest?
+
+
+        # If the host is 'OK' then go ahead and migrate the guest to it
+        if [ ${OK} -eq 1 ]
+        then
+            echo "migrate_guest \"${GUEST}\" \"${SERVERS[$I]}\""
+            migrate_guest "${GUEST}" "${SERVERS[$I]}"
+
+            # Increment the counter so the next guest will start
+            # with the next server
+            START=$(( ${I} + 1 ))
+
+            # Rotate back to the top of the server list if
+            # we have reached the end
+            if [ ${START} -ge ${#SERVERS[@]} ]
+            then
+                START=0
+            fi
+            break
+        fi
+    done
+done
+echo ""
+
+echo "# Running yum -y update on ${VACATE}"
+echo ssh "${VACATE}" "yum -y update"
+ssh "${VACATE}" "yum -y update"
+echo ""
+
+if [ ${REBOOT} -eq 1 ]
+then
+    echo "# Rebooting ${VACATE}"
+    echo ssh "${VACATE}" "reboot"
+    ssh "${VACATE}" "reboot"
+    echo ""
+    DOWN=0
+    echo "# Waiting for ${VACATE} to go down"
+    while [ ${DOWN} -eq 0 ]
+    do
+        ping -q -c 1 -w 1 "${VACATE}" 2>&1 >/dev/null
+        DOWN=$?
+        echo -n "."
+        sleep 1
+    done
+    echo ""
+    echo "# Waiting for ${VACATE} to come back up"
+    while [ ${DOWN} -eq 1 ]
+    do
+        ping -q -c 1 -w 1 "${VACATE}" 2>&1 >/dev/null
+        DOWN=$?
+        echo -n "."
+        sleep 1
+    done
+    echo ""
+    echo ""
+fi
+
+SLEEP=300
+echo "# waiting ${SLEEP} seconds for ${VACATE} to stabilize"
+sleep ${SLEEP}
+echo ""
+
+echo "# performing sanity check on ${VACATE}"
+SANE=0
+MOUNTED=$( ssh "${VACATE}" "if [ -d /gfs/mnt/vme/virt-store ]; then echo 1; else echo 0; fi")
+if [ ${MOUNTED} -eq 1 ]
+then
+    echo "# shared volume is mounted, good"
+else
+    echo "ERROR: shared volume not mounting, exiting"
+    echo "use the following commands to move the guests back"
+    echo "once the system has been corrected."
+    for GUEST in ${GUESTS}
+    do
+        echo migrate_guest "${GUEST}" "${VACATE}"
+    done
+    exit 1;
+fi
+echo ""
+
+echo "# Moving guests back onto ${VACATE}"
+for GUEST in ${GUESTS}
+do
+    echo migrate_guest "${GUEST}" "${VACATE}"
+    migrate_guest "${GUEST}" "${VACATE}"
+done

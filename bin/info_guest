@@ -1,0 +1,109 @@
+#!/bin/bash
+#
+# FILENAME:     info_guest
+# AUTHOR:       Bennett Samowich <bennett@foolean.org>
+# DATE:         2016-04-21
+#
+# DESCRIPTION:
+#   info_guest is a simple script to output information abouta  KVM guest
+#   in an environment with multiple Hypervisors.
+#
+###############################################################################
+
+# Find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Basic usage/help function
+usage() {
+    echo "usage: ${MYNAME} [-q] guest"
+    echo "where:"
+    echo "  -h      - Print this message"
+    echo "  -q      - Suppress notification messages"
+    exit 1
+}
+
+# Parse the command-line options
+while getopts "Dhq" OPTION
+do
+    case $OPTION in
+        D)
+            DEBUG=1
+            ;;
+        h)  
+            usage
+            exit 1;     # should never get here
+            ;;
+        q)  
+            QUIET=1
+            ;;
+        ?)  
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+# we must have been given a guest name
+GUEST=$1
+if [ "${GUEST}" == "" ]
+then
+    usage
+    exit 1
+fi
+
+# Find the server the guest is on
+SERVER=$(get_server "${GUEST}")
+if [ "${SERVER}" == "" ]
+then
+    fatal "Unable to info '${GUEST}', guest not found"
+    exit 1; # should never get here
+fi
+
+# Get the infrmation about the guest
+notice "Getting information for '${GUEST}' on '${SERVER}'"
+CONNECT=$(get_connect_method "${SERVER}") 
+
+echo -n "State:          "
+"${VIRSH}" ${CONNECT} domstate "${GUEST}" --reason | head -n1
+"${VIRSH}" ${CONNECT} dominfo "${GUEST}" 
+"${VIRSH}" ${CONNECT} domiflist "${GUEST}" 
+echo "Storage:"
+"${VIRSH}" ${CONNECT} domblklist "${GUEST}" | tail -n+3 | \
+while read LINE
+do
+    DEVICE=$(echo "${LINE}" | awk '{print $1}')
+    IMAGE=$(echo "${LINE}" | awk '{print $2}')
+
+    if [ "${DEVICE}" != "" ]
+    then
+        echo "[ ${DEVICE}: ${IMAGE} ]"
+        "${VIRSH}" ${CONNECT} domblkinfo "${GUEST}" "${DEVICE}" | \
+        while read INFO_LINE
+        do
+            NUM=""
+            if [ "${INFO_LINE}" != "" ]
+            then
+                NUM=$(humanize $(echo "${INFO_LINE}" | awk '{print $2}'))
+                NUM=" (${NUM})"
+            fi
+            echo "${INFO_LINE} ${NUM}"
+        done
+    fi
+done
+
+echo "Snapshots:"
+echo " Name                 Creation Time             State           Parent"
+echo "------------------------------------------------------------------------------"
+"${VIRSH}" ${CONNECT} snapshot-list "${GUEST}" --roots | head -n3 | tail -n1
+"${VIRSH}" ${CONNECT} snapshot-list "${GUEST}" --tree | sed -e 's/^.*|//g' -e 's/^.*+- //' -e '/^\s*$/d' | \
+while read SNAP
+do
+    "${VIRSH}" ${CONNECT} snapshot-list "${GUEST}" --from "${SNAP}" --parent | head -n3 | tail -n1
+done
+
+

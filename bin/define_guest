@@ -1,0 +1,76 @@
+#!/bin/bash
+#
+# FILENAME:     define_guest
+# AUTHOR:       Bennett Samowich <bennett@foolean.org>
+# DATE:         2016-09-30
+#
+# DESCRIPTION:
+#   define_guest is a simple script to handle the saving of a KVM guest's
+#   in an environment with multiple Hypervisors.
+#
+###############################################################################
+
+# Find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Basic usage/help function
+usage() {
+    echo "usage: ${MYNAME} [-q] guest"
+    echo "where:"
+    echo "  -h      - Print this message"
+    echo "  -q      - Suppress notification messages"
+    exit 1
+}
+
+# Parse the command-line options
+while getopts "Dhq" OPTION
+do
+    case $OPTION in
+        D)
+            DEBUG=1
+            ;;
+        h)  
+            usage
+            exit 1;     # should never get here
+            ;;
+        q)  
+            QUIET=1
+            ;;
+        ?)  
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+# we must have been given a guest name
+GUEST=$1
+if [ "${GUEST}" == "" ]
+then
+    usage
+    exit 1
+fi
+
+SERVER=$2
+if [ "${SERVER}" == "" ]
+then
+    error "Must supply a server name"
+    usage
+    exit 1
+fi
+
+# Get the connection method
+CONNECT=$(get_connect_method "${SERVER}")
+
+# Get the xml to load based on the guest's name
+GUEST_XML="/gfs/mnt/vme/virt-store/${GUEST}/${GUEST}.xml"
+
+# Define the guest on the destination server
+notice "Defining '${GUEST}' on '${SERVER}'"
+echo ssh "${SERVER}" "virsh define \"${GUEST_XML}\""
+ssh "${SERVER}" "virsh define \"${GUEST_XML}\""

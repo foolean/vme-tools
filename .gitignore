@@ -1,0 +1,11 @@
+
+# don't track the site's VME configuration
+etc/vme.cfg
+
+# don't track the site's SSH keys
+etc/id_rsa_vme
+etc/id_rsa_vme.pub
+
+# don't track development "crumbs"
+bin/doit*
+orig

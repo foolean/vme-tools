@@ -1,0 +1,78 @@
+#!/bin/bash
+#
+# FILENAME:     rpower
+# AUTHOR:       Bennett Samowich <bennett@foolean.org>
+# DATE:         2016-04-21
+#
+# DESCRIPTION:
+#   rpower is a simple script to work with a chassis' power via ipmitool and
+#   is modled after xcat's rpower command.
+#
+###############################################################################
+
+# find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Basic usage/help function
+usage() {
+    echo "usage: ${MYNAME} [host] [on|off|blink]"
+    exit 1
+}
+
+# Helper function to set the beacon
+set_beacon() {
+    SERVER="$1"
+    STATUS="$2"
+
+    echo -n "${SERVER}: "
+    ipmitool -I lanplus -H "${SERVER}" -U "${IPMI_USER}" -P "${IPMI_PASS}" chassis identify "${STATUS}"
+}
+
+# Parse the command-line options
+while getopts "h" OPTION
+do
+    case $OPTION in
+        h)  
+            usage
+            exit 1;     # should never get here
+            ;;
+        ?)  
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+# Get the host
+HOST="$1"
+if [ "${HOST}" == "" ]
+then
+    fatal "no host specified"
+    exit 1; # should never get here
+fi
+
+# Make sure we're working with the '-bmc' hostname
+HOST=$(echo "${HOST}" | sed -e 's/\(vmw-\w*\)-\w*$/\1/')
+HOST="${HOST}-bmc"
+
+# Get the desired state
+STATE="$2"
+case $STATE in
+    "on")
+        set_beacon "${HOST}" "force"
+        ;;
+    "off")
+        set_beacon "${HOST}" "0"
+        ;;
+    "blink")
+        set_beacon "${HOST}" "15"
+        ;;
+    *)
+        fatal "Unable to set beacon, unknown state request '${STATE}'"
+        ;;
+esac

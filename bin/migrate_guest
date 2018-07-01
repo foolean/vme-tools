@@ -1,0 +1,132 @@
+#!/bin/bash
+#
+# FILENAME:     start_guest
+# AUTHOR:       Bennett Samowich <bennett@foolean.org>
+# DATE:         2016-04-21
+#
+# DESCRIPTION:
+#   migrate_guest is a simple script to handle the migrating of KVM guests
+#   in an environment with multiple Hypervisors.  This script relies on
+#   the 'list_guests' script to handle searching for the guest within
+#   the environment.
+#
+###############################################################################
+
+# Find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Basic usage/help function
+usage() {
+    echo "usage: ${MYNAME} [-hq] guest dest-server"
+    echo "where:"
+    echo "  -h      - Print this message"
+    echo "  -q      - Suppress notification messages"
+    exit 1
+}
+
+# Parse the command-line options
+while getopts "Dhq" OPTION
+do
+    case $OPTION in
+        D)
+            DEBUG=1
+            ;;
+        h)  
+            usage
+            exit 1;     # should never get here
+            ;;
+        q)  
+            QUIET=1
+            ;;
+        ?)  
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+# we must have been given a guest name and destination server
+GUEST=$1
+DST_SERVER=$2
+if [ "${GUEST}" == "" ] || [ "${DST_SERVER}" == "" ]
+then
+    usage
+    exit 1; # should never get here
+fi
+
+# Find the server the guest is on
+SRC_SERVER=$(get_server "${GUEST}")
+if [ "${SRC_SERVER}" == "" ]
+then
+    fatal "Unable to migrate '${GUEST}', guest not found"
+    exit 1; # should never get here
+fi
+
+# Don't bother if the source and destination are the same
+if [ "${SRC_SERVER}" == "${DST_SERVER}" ]
+then
+    fatal "Unable to migrate '${GUEST}', source and desstination are identical"
+    exit 1; # should never get here
+fi
+
+# Get the guest's virt-store
+VIRT_STORE=$(get_img_store "${GUEST}")
+if [ "${VIRT_STORE}" == "" ]
+then
+    fatal "Unable to migrate '${GUEST}', missing or non-standard image store"
+    exit 1; # should never get here
+fi
+
+# Get the guest's management virt-store path
+VMGR_VIRT_STORE=$(get_mgmt_img_store "${SRC_SERVER}")
+if [ "${VMGR_VIRT_STORE}" == "" ]
+then
+    fatal "Unable to migrate '${GUEST}', missing or non-standard vmgr image store"
+    exit 1; # should never get here
+fi
+
+# Get the current snapshot
+CURRENT=$("${VIRSH}" $(get_connect_method "${SRC_SERVER}") snapshot-current "${GUEST}" --name)
+
+# Save and delete the metadata for the snapshots
+"${VIRSH}" $(get_connect_method "${SRC_SERVER}") snapshot-list "${GUEST}" --tree |\
+    sed -e 's/^.*|//g' -e 's/^.*+- //' -e '/^\s*$/d' | sort -r | \
+    while read SNAP
+    do
+        notice "Saving metadata for snapshot '${SNAP}' to XML"
+        "${VIRSH}" $(get_connect_method "${SRC_SERVER}") snapshot-dumpxml "${GUEST}" --snapshotname "${SNAP}" --security-info > "${VMGR_VIRT_STORE}/${GUEST}/snapshot_${GUEST}_$(date +%Y%m%d%H%M%S).xml"
+
+        notice "Deleting metadata for snapshot '${SNAP}' from '${GUEST}'"
+        "${VIRSH}" $(get_connect_method "${SRC_SERVER}") snapshot-delete "${GUEST}" --snapshotname "${SNAP}" --metadata
+
+        sleep 1
+    done
+
+notice "Setting ownership/permissions at '${SRC_SERVER}'"
+set_guest_perms "${GUEST}"
+
+# Migrate the guest
+notice "Migrating '${GUEST}' from '${SRC_SERVER}' to '${DST_SERVER}'"
+"${VIRSH}" $(get_connect_method "${SRC_SERVER}") migrate --live \
+   --verbose --persistent --undefinesource  "${GUEST}" "qemu+ssh://${DST_SERVER}/system"
+
+notice "Setting ownership/permissions at '${DST_SERVER}'"
+set_guest_perms "${GUEST}"
+
+# Restore the metadata for the snapshots
+for SNAP_XML in $(ls "${VMGR_VIRT_STORE}/${GUEST}/snapshot_${GUEST}_"*".xml" | sort -r)
+do
+    notice "Redefining snapshot '${SNAP_XML}' for '${GUEST}' on '${DST_SERVER}'"
+    "${VIRSH}" $(get_connect_method "${DST_SERVER}") snapshot-create "${GUEST}" "${SNAP_XML}" --redefine
+
+    notice "Removing '${SNAP_XML}'"
+    rm "${SNAP_XML}"
+done
+
+# Set the current snapshot
+"${VIRSH}" $(get_connect_method "${DST_SERVER}") snapshot-current "${GUEST}" "${CURRENT}"

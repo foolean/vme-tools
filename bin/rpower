@@ -1,0 +1,128 @@
+#!/bin/bash
+#
+# FILENAME:     rpower
+# AUTHOR:       Bennett Samowich <bennett@foolean.org>
+# DATE:         2016-04-21
+#
+# DESCRIPTION:
+#   rpower is a simple script to work with a chassis' power via ipmitool and
+#   is modled after xcat's rpower command.
+#
+###############################################################################
+ 
+# find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Basic usage/help function
+usage() {
+    echo "usage: ${MYNAME} [host] [on|off|cycle|status]"
+    exit 1
+}
+
+# Helper function to turn off the chassis
+turn_off() {
+    SERVER="$1"
+
+    STATUS=$(rstatus "${HOST}")
+    if [ ${STATUS} -eq 1 ]; then
+        echo "${HOST} is on, turning off"
+        ipmitool -I lanplus -H "${SERVER}" -U "${IPMI_USER}" -P "${IPMI_PASS}" chassis power off
+    else
+        echo "${HOST} is already off, skipping"
+    fi
+}
+
+# Helper function to turn on the chassis
+turn_on() {
+    SERVER="$1"
+
+    STATUS=$(rstatus "${HOST}")
+    if [ ${STATUS} -eq 0 ]; then
+        echo "${HOST} is off, turning on"
+        ipmitool -I lanplus -H "${SERVER}" -U "${IPMI_USER}" -P "${IPMI_PASS}" chassis power on
+    else
+        echo "${HOST} is already on, skipping"
+    fi
+}
+
+# Helper function to power cycle the chassis
+cycle() {
+    SERVER="$1"
+    echo "power cycling ${HOST}"
+    ipmitool -I lanplus -H "${SERVER}" -U "${IPMI_USER}" -P "${IPMI_PASS}" chassis power cycle
+}
+
+# Helper function to get the chassis' power status
+status() {
+    SERVER="$1"
+    echo -n "${SERVER}: "
+    ipmitool -I lanplus -H "${SERVER}" -U "${IPMI_USER}" -P "${IPMI_PASS}" chassis power status
+}
+
+# Helper function to return the chassis' power status
+# as a '1' or '0'.  Useful for functions that need to
+# test status as part of conditional operations.
+rstatus() {
+    SERVER="$1"
+
+    STATUS=$(ipmitool -I lanplus -H "${SERVER}" -U "${IPMI_USER}" -P "${IPMI_PASS}" chassis power status 2>/dev/null)
+    IS_ON=3
+    if [ "${STATUS}" != "" ]; then
+        IS_ON=$(echo "${STATUS}" | grep -c1 "Chassis Power is on")
+    fi
+    #echo "STATUS = '${STATUS}'"
+    #echo "IS_ON  = '${IS_ON}'"
+    echo "${IS_ON}"
+}
+
+# Parse the command-line options
+while getopts "h" OPTION
+do
+    case $OPTION in
+        h)  
+            usage
+            exit 1;     # should never get here
+            ;;
+        ?)  
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+# Get the host
+HOST="$1"
+if [ "${HOST}" == "" ]
+then
+    fatal "no host specified"
+    exit 1; # should never get here
+fi
+
+# Make sure we're working with the '-bmc' hostname
+HOST=$(echo "${HOST}" | sed -e 's/\(vmw-\w*\)-\w*$/\1/')
+HOST="${HOST}-bmc"
+
+# Get the desired state
+STATE="$2"
+case $STATE in
+    "on")
+        turn_on "${HOST}"
+        ;;
+    "off")
+        turn_off "${HOST}"
+        ;;
+    "cycle")
+        cycle "${HOST}"
+        ;;
+    status|stat|st)
+        status "${HOST}"
+        ;;
+    *)
+        echo "unknown state request '${STATE}'"
+        ;;
+esac

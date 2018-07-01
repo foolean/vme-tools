@@ -1,0 +1,77 @@
+#!/bin/bash
+#
+# FILENAME:     node_list
+# AUTHOR:       Bennett Samowich <bennett@foolean.org>
+# DATE:         2016-04-21
+#
+# DESCRIPTION:
+#   node_list is a simple script to handle the listing of a few simple metrics
+#   about KVM Hypervisors (or nodes).  
+#
+###############################################################################
+
+# Find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Amount of memory, in KiB, to reserve for the Hypervisor
+RESERVED_MEM=4194304
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Set the default gender
+GENDER="${DEFAULT_GENDER}"
+
+# Parse the command-line options
+while getopts "Dhg:q" OPTION
+do
+    case $OPTION in
+        D)  
+            DEBUG=1
+            ;;
+        h)  
+            usage
+            exit 1;     # should never get here
+            ;;
+        g)  
+            GENDER="${OPTARG}"
+            ;;
+        q)  
+            QUIET=1
+            ;;
+        ?)  
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+
+# Print the header
+notice "Memory reserved for Hypervisor: $(humanize $((${RESERVED_MEM}*1024)))"
+notice "Server           Guests  Total-Mem   Avail-Mem"
+notice "------------------------------------------------------------"
+
+for NODE in $(nodeattr -n "${GENDER}")
+do
+    # Get the infrmation about the guest
+    CONNECT=$(get_connect_method "${NODE}")
+    GUEST_LIST=$("${VIRSH}" ${CONNECT} list --all)
+    GUESTS=$(echo "${GUEST_LIST}" | tail -n+3 | grep -v "^$" | grep -v "shut off$" | wc -l)
+   
+    TOTAL_MEM=$("${VIRSH}" ${CONNECT} nodememstats | awk '/^total/{print $3}')
+    ALLOCATED_MEM=$("${VIRSH}" ${CONNECT} list --all | \
+        awk '/(running|idle|paused|shutdown|crashed|dying|pmsuspended)$/{print $2}' | \
+        while read GUEST
+        do
+            "${VIRSH}" ${CONNECT} dominfo "${GUEST}"
+        done | awk 'BEGIN{sum=0}/^Max memory/{sum+=$3}END{print sum}')
+    AVAILABLE_MEM=$(( ${TOTAL_MEM} - ${ALLOCATED_MEM} - ${RESERVED_MEM} ))
+    
+    AVAILABLE_MEM=$(humanize $(( ${AVAILABLE_MEM} * 1024 )) ) 
+    printf "%-15s " "${NODE}"
+    printf "%7s "   "${GUESTS}"
+    printf "%10s "  "$(humanize $(( ${TOTAL_MEM} * 1024 )) )"
+    printf "%10s "  "${AVAILABLE_MEM}"
+    printf "\n"
+done

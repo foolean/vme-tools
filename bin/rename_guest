@@ -1,0 +1,150 @@
+#!/bin/bash
+#
+# FILENAME:     rename_guest
+# AUTHOR:       Bennett Samowich <bennett@foolean.org>
+# DATE:         2016-04-21
+#
+# DESCRIPTION:
+#   rename_guest is a simple script to handle the renaming of KVM guests
+#   in an environment with multiple Hypervisors.  This script relies on
+#   the 'list_guests' script to handle searching for the guest within
+#   the environment.
+#
+###############################################################################
+
+# Find out where in the world we are
+VMEBIN=$(readlink -f $(dirname $0))
+MYNAME=$(basename $0)
+
+# Load common functions and variables
+. "${VMEBIN}/vme-common"
+
+# Basic usage/help function
+usage() {
+    echo "usage: ${MYNAME} [-cDqs] guest new-name"
+    echo "  -c      - connect to the guest's console after moving (implies -s)"
+    echo "  -D      - turn on debugging output"
+    echo "  -h      - print this message"
+    echo "  -q      - suppress notfication output"
+    echo "  -s      - start the guest on the destination server"
+    exit 1
+}
+
+# Start the guest after moving
+START=0
+CONNECT=0
+
+# Parse the command-line options
+while getopts "cDhqs" OPTION
+do
+    case $OPTION in
+        c)
+            CONNECT=1
+            START=1
+            ;;
+        D)
+            DEBUG=1
+            ;;
+        h)  
+            usage
+            exit 1;     # should never get here
+            ;;
+        q)  
+            QUIET=1
+            ;;
+        s)
+            START=1
+            ;;
+        ?)  
+            echo "Unknown argument, exiting"
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+# we must have been given a guest name and destination server
+GUEST=$1
+NEW_GUEST=$2
+if [ "${GUEST}" == "" ] || [ "${NEW_GUEST}" == "" ]
+then
+    usage
+    exit 1; # should never get here
+fi
+
+# Find the server the guest is on
+SERVER=$(get_server "${GUEST}")
+if [ "${SERVER}" == "" ]
+then
+    fatal "Unable to delete '${GUEST}', guest not found"
+    exit 1; # should never get here
+fi
+
+# Get the source and destination image stores
+SRC_IMG_STORE=$(get_mgmt_img_store "${SERVER}")
+SRC_IMG_PATH="${SRC_IMG_STORE}/${GUEST}"
+DST_IMG_PATH="${SRC_IMG_STORE}/${NEW_GUEST}"
+SRC_XML="${SRC_IMG_PATH}/${GUEST}.xml"
+DST_XML="${SRC_IMG_PATH}/${NEW_GUEST}.xml"
+
+# Rename the guest
+notice "Renaming '${GUEST}' to '${NEW_GUEST}' on '${SERVER}'"
+
+# Stop the guest
+"${VMEBIN}/stop_guest" "${GUEST}"
+
+# Get the connection method for the source server
+SRC_CONNECT=$(get_connect_method "${SERVER}")
+
+# Save the XML
+notice "Saving the XML configuration for '${GUEST}'"
+"${VIRSH}" ${SRC_CONNECT} dumpxml --migratable "${GUEST}" > "${SRC_XML}"
+
+# Create the new guest XML
+cat "${SRC_XML}" | \
+    sed -e "s/<name>${GUEST}<\/name>/<name>${NEW_GUEST}<\/name>/"    \
+    > "${DST_XML}"
+
+# Rename all image files
+"${VIRSH}" ${SRC_CONNECT} domblklist "${GUEST}" --details | \
+    awk '{if($2=="disk"){print $3" "$4}}' | sort -k1 | \
+    while read DISK_INFO
+    do
+        DISK=$(echo "${DISK_INFO}" | awk '{print $1}')
+        DISK_IMG=$(echo "${DISK_INFO}" | awk '{print $2}')
+        NEW_DISK_IMG="/gfs/mnt/vme/virt-store/${NEW_GUEST}/${NEW_GUEST}-${DISK}"
+
+        # Rename the disk image
+        mv "${SRC_IMG_PATH}/$(basename ${DISK_IMG})" "${SRC_IMG_PATH}/${NEW_GUEST}-${DISK}"
+
+        # Update the XML with the new disk image name
+        cat "${DST_XML}" | \
+            sed -e "s#<source file='${DISK_IMG}'\/>#<source file='${NEW_DISK_IMG}'\/>#" \
+            > "${DST_XML}.tmp"
+        mv "${DST_XML}.tmp" "${DST_XML}"
+    done
+
+# Undefine the guest from the source server
+notice "Undefining '${GUEST}' from '${SRC_SERVER}'"
+"${VIRSH}" ${SRC_CONNECT} undefine "${GUEST}"
+
+# Rename the image directory
+notice "Moving '${SRC_IMG_PATH}' to '${DST_IMG_PATH}'"
+mv "${SRC_IMG_PATH}" "${DST_IMG_PATH}"
+
+# Define the guest on the destination server
+notice "Defining '${GUEST}' on '${SERVER}'"
+"${VIRSH}" ${SRC_CONNECT} define "${DST_IMG_PATH}/${NEW_GUEST}.xml"
+
+# Start the guest
+if [ ${START} -eq 1 ]
+then
+    "${VMEBIN}/start_guest" "${NEW_GUEST}"
+fi
+
+# Connect to the guest
+if [ ${CONNECT} -eq 1 ]
+then
+    "${VMEBIN}/console_guest" "${NEW_GUEST}"
+fi
+
