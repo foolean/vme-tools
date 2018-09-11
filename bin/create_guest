@@ -32,7 +32,7 @@ usage() {
     echo "Where:"
     echo "  -a [cachetype]      - cache type for the image"
     echo "                        (writethrough, writeback, none)"
-    echo "  -b bridge           - bridge interface"
+    echo "  -b bridge           - bridge interface (space separated for multiple)"
     echo "  -c cpu              - number of virtual cpu"
     echo "  -d size             - size of the virtual disk in GB"
     echo "  -D                  - print some debugging information"
@@ -206,6 +206,13 @@ then
     chown "${KVM_USER}:${KVM_GROUP}" "${VMGR_VM_IMG}"
 fi
 
+# Assemble the network configuration
+NETWORK_CONFIG=""
+for BRIDGE in ${VM_BRIDGE}
+do
+    NETWORK_CONFIG="${NETWORK_CONFIG} --network bridge=${BRIDGE},model=virtio"
+done
+
 # Create the guest
 notice "Creating the guest: '${VM_NAME}' on '${SERVER}'"
 ${VIRT_INSTALL}                                                     \
@@ -217,7 +224,7 @@ ${VIRT_INSTALL}                                                     \
     --vcpus=${VM_CPU}                                               \
     --disk path="${VM_IMG},sparse=false,format=${VM_IMG_TYPE},cache=${VM_IMG_CACHE},io=native,bus=virtio,size=${VM_DISK}" \
     --os-type="linux"                                               \
-    --network "bridge=${VM_BRIDGE},model=virtio"                    \
+    ${NETWORK_CONFIG}                                               \
     --boot hd,network,menu=on                                       \
     --pxe                                                           \
     --noautoconsole                                                 \
