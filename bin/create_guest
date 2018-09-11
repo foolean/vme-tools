@@ -50,12 +50,13 @@ VM_DISK="${DEFAULT_VM_DISK}"
 VM_RAM="${DEFAULT_VM_RAM}"
 VM_CPU="${DEFAULT_VM_CPU}"
 VM_BRIDGE="${DEFAULT_VM_BRIDGE}"
+VM_TYPE="${DEFAULT_VM_TYPE}"
 VM_IMG_TYPE="${DEFAULT_VM_IMG_TYPE}"
 VM_IMG_CACHE="${DEFAULT_VM_IMG_CACHE}"
 SERVER="${DEFAULT_SERVER}"
 
 # Parse the command-line options
-while getopts "a:c:Dd:hm:qr:s:t:" OPTION
+while getopts "a:b:c:Dd:hm:qr:s:t:" OPTION
 do
     case $OPTION in
         a)
@@ -147,14 +148,16 @@ VMGR_VM_IMG="${VMGR_VM_IMG_PATH}/${VM_NAME}-vda"
 VM_IMG="${VIRT_STORE}/${VM_NAME}/${VM_NAME}-vda"
 
 # Print the debugging information
-debug "VIRT_STORE:         '${VM_STORE}'"
+debug "VIRT_STORE:       '${VM_STORE}'"
 debug "VM_CPU:           '${VM_CPU}'"
 debug "VM_RAM:           '${VM_RAM}'"
-debug "VM_DISK:     '${VM_DISK}'"
+debug "VM_DISK:          '${VM_DISK}'"
 debug "VM_NAME:          '${VM_NAME}'"
-debug "SERVER:        '${SERVER}'"
+debug "VM_BRIDGE:        '${VM_BRIDGE}'"
+debug "VM_TYPE:          '${VM_TYPE}'"
+debug "SERVER:           '${SERVER}'"
 debug "VM_ZONE:          '${VM_ZONE}'"
-debug "VMGR_VIRT_STORE:    '${VMGR_VM_STORE}'"
+debug "VMGR_VIRT_STORE:  '${VMGR_VM_STORE}'"
 debug "VMGR_VM_IMG_PATH: '${VMGR_VM_IMG_PATH}'"
 debug "VMGR_VM_IMG:      '${VMGR_VM_IMG}'"
 debug "VM_IMG:           '${VM_IMG}'"
@@ -223,7 +226,7 @@ notice "return code is '$?'"
 
 # Dump the XML for later use
 notice "Saving XML configuration"
-"${VIRSH}" $(get_connect_method $(get_server "${VM_NAME}")) \
+"${VIRSH}" $(get_connect_method "${SERVER}") \
     dumpxml --migratable "${VM_NAME}" > "${VMGR_VM_IMG_PATH}/${VM_NAME}.xml" 
 chmod 640 "${VMGR_VM_IMG_PATH}/${VM_NAME}.xml"
 chown "${KVM_USER}:${KVM_GROUP}" "${VMGR_VM_IMG_PATH}/${VM_NAME}.xml"
